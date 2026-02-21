@@ -80,6 +80,10 @@ def main():
     seen = set()
     free_units = []
 
+    # Heartbeat için status sayaçları (unique unit bazlı sayacağız)
+    status_counts = {"frei": 0, "reserviert": 0, "vermietet": 0}
+    unknown_status = 0
+
     for a in anchors:
         title = a.get("data-original-title") or a.get("title") or ""
         typ = base_type(title)
@@ -95,21 +99,37 @@ def main():
         data_text = a.get("data-text") or ""
         status, link = extract_status_and_link(data_text)
 
+        # bazen status regex kaçırırsa
         if status is None and "unit_free" in data_text:
             status = "frei"
 
+        # sayaçlar (sadece bildiklerimizi say)
+        if status in status_counts:
+            status_counts[status] += 1
+        elif status is not None:
+            unknown_status += 1
+
+        # frei listesi
         if status == "frei":
             free_units.append((typ, number, link))
 
+    total_komfort = len(seen)
     now = datetime.now(TZ)
 
-    # 3) Heartbeat: 10:00 ve 18:00 (Almanya saati)
+    # 3) Heartbeat: 10:00 ve 18:00 (Almanya saati) — durum özeti
     if now.hour in (10, 18) and now.minute == 0:
         hb_key = now.strftime("%Y-%m-%d_%H")
         if state.get("last_heartbeat_key") != hb_key:
-            send_telegram(
-                f"🫀 BOT CANLI ({now.strftime('%Y-%m-%d %H:%M')} DE)\nKomfort-Apartment takip aktif."
-            )
+            msg = (
+                    f"🫀 Günlük durum ({now.strftime('%Y-%m-%d %H:%M')} DE)\n"
+                    f"Bot aktif\n"
+                    f"Komfort anchor: {total_komfort}\n"
+                    f"Status frei: {status_counts['frei']}\n"
+                    f"Status reserviert: {status_counts['reserviert']}\n"
+                    f"Status vermietet: {status_counts['vermietet']}\n"
+                    f"Bilinmeyen status: {unknown_status}"
+                )
+            send_telegram(msg)
             state["last_heartbeat_key"] = hb_key
 
     # 4) SPAM MODU: Frei varsa HER 5 DK'DA BİR mesaj at
@@ -127,7 +147,7 @@ def main():
     state["last_free_hash"] = ""
 
     save_state(state)
-    print("OK. free_units:", len(free_units_sorted))
+    print("OK. total_komfort:", total_komfort, "| free_units:", len(free_units_sorted))
 
 
 if __name__ == "__main__":
