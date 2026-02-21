@@ -2,8 +2,11 @@ name: Apartment Check
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # her 5 dakikada bir
+    - cron: "*/5 * * * *"   # GitHub Actions pratikte 5 dk granüler
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   run-check:
@@ -26,3 +29,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python watch.py
+
+      - name: Commit state.json (anti-spam + heartbeat tracking)
+        run: |
+          git config user.name "apartment-watcher"
+          git config user.email "actions@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || (git commit -m "Update state" && git push)
