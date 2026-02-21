@@ -59,6 +59,8 @@ def send_telegram(text: str):
     ).raise_for_status()
 
 def main():
+        # 🧪 TEK SEFERLIK TEST MESAJI
+    send_telegram("🧪 TEST OK — Bot cloud’da çalışıyor ve Telegram bağlı.")
     state = load_state()
 
     # 1) Sayfayı çek
