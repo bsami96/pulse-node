@@ -116,22 +116,23 @@ def main():
     total_komfort = len(seen)
     now = datetime.now(TZ)
 
-    # 3) Heartbeat: 10:00 ve 18:00 (Almanya saati) — durum özeti
-    if now.hour in (10, 18) and now.minute == 0:
-        hb_key = now.strftime("%Y-%m-%d_%H")
-        if state.get("last_heartbeat_key") != hb_key:
-            msg = (
-                    f"🫀 Günlük durum ({now.strftime('%Y-%m-%d %H:%M')} DE)\n"
-                    f"Bot aktif\n"
-                    f"Komfort anchor: {total_komfort}\n"
-                    f"Status frei: {status_counts['frei']}\n"
-                    f"Status reserviert: {status_counts['reserviert']}\n"
-                    f"Status vermietet: {status_counts['vermietet']}\n"
-                    f"Bilinmeyen status: {unknown_status}"
-                )
-            send_telegram(msg)
-            state["last_heartbeat_key"] = hb_key
+# 3) Heartbeat: 10 ve 18 (Almanya saati) — ilk 5 dakikada 1 kez
+now = datetime.now(TZ)
 
+if now.hour in (10, 18) and now.minute < 5:
+    hb_key = now.strftime("%Y-%m-%d_%H")  # o saat için tek anahtar
+    if state.get("last_heartbeat_key") != hb_key:
+        msg = (
+            f"🫀 Günlük durum ({now.strftime('%Y-%m-%d %H:%M')} DE)\n"
+            f"Bot aktif\n"
+            f"Komfort anchor: {total_komfort}\n"
+            f"Status frei: {status_counts['frei']}\n"
+            f"Status reserviert: {status_counts['reserviert']}\n"
+            f"Status vermietet: {status_counts['vermietet']}\n"
+            f"Unknown status: {unknown_status}"
+        )
+        send_telegram(msg)
+        state["last_heartbeat_key"] = hb_key
     # 4) SPAM MODU: Frei varsa HER 5 DK'DA BİR mesaj at
     free_units_sorted = sorted(free_units, key=lambda x: (x[0], x[1]))
 
