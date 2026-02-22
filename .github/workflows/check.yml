@@ -1,8 +1,6 @@
 name: Apartment Check
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"   # GitHub Actions pratikte 5 dk granüler
   workflow_dispatch:
 
 permissions:
