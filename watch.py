@@ -117,25 +117,23 @@ def main():
     now = datetime.now(TZ)
 
     # 3) Heartbeat: 10 ve 18 (Almanya saati) — ilk 5 dakikada 1 kez
-        now = datetime.now(TZ)
-
-        if now.hour in (10, 18) and now.minute < 5:
-            hb_key = now.strftime("%Y-%m-%d_%H")  # o saat için tek anahtar
-                if state.get("last_heartbeat_key") != hb_key:
+    if now.hour in (10, 18) and now.minute < 5:
+        hb_key = now.strftime("%Y-%m-%d_%H")  # o saat için tek anahtar
+        if state.get("last_heartbeat_key") != hb_key:
             msg = (
-            f"🫀 Günlük durum ({now.strftime('%Y-%m-%d %H:%M')} DE)\n"
-            f"Bot aktif\n"
-            f"Komfort anchor: {total_komfort}\n"
-            f"Status frei: {status_counts['frei']}\n"
-            f"Status reserviert: {status_counts['reserviert']}\n"
-            f"Status vermietet: {status_counts['vermietet']}\n"
-            f"Unknown status: {unknown_status}"
+                f"🫀 Günlük durum ({now.strftime('%Y-%m-%d %H:%M')} DE)\n"
+                f"Bot aktif\n"
+                f"Komfort anchor: {total_komfort}\n"
+                f"Status frei: {status_counts['frei']}\n"
+                f"Status reserviert: {status_counts['reserviert']}\n"
+                f"Status vermietet: {status_counts['vermietet']}\n"
+                f"Unknown status: {unknown_status}"
             )
-        send_telegram(msg)
-        state["last_heartbeat_key"] = hb_key
+            send_telegram(msg)
+            state["last_heartbeat_key"] = hb_key
+
     # 4) SPAM MODU: Frei varsa HER 5 DK'DA BİR mesaj at
     free_units_sorted = sorted(free_units, key=lambda x: (x[0], x[1]))
-
     if free_units_sorted:
         lines = [f"🚨 FREI! ({now.strftime('%Y-%m-%d %H:%M')} DE)"]
         for typ, number, link in free_units_sorted:
@@ -145,7 +143,7 @@ def main():
         send_telegram("\n".join(lines))
 
     # last_free_hash artık önemli değil; ama dosyayı stabil tutalım
-        state["last_free_hash"] = ""
+    state["last_free_hash"] = ""
 
     save_state(state)
     print(f"OK. total_komfort: {total_komfort} | free_units: {len(free_units_sorted)}")
