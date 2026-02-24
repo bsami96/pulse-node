@@ -20,7 +20,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 STATE_PATH = "state.json"
 TZ = ZoneInfo("Europe/Berlin")
 
-POLL_INTERVAL_NO_FREE_SEC = 30
+POLL_INTERVAL_NO_FREE_SEC = 20
 POLL_INTERVAL_FREE_SEC = 10
 
 # ŞU AN SENİN TEST AYARIN
