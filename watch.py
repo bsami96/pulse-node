@@ -24,10 +24,18 @@ TZ = ZoneInfo("Europe/Berlin")  # Almanya saati
 # === 2 vites polling ===
 POLL_INTERVAL_NO_FREE_SEC = 30   # frei yokken
 POLL_INTERVAL_FREE_SEC = 10      # frei varken
-RUN_WINDOW_SEC = 55              # cron 1 dk: run'ı 55 sn civarı tut
 
-# STILL mesajları çok spam olabilir; True ise her free-check'te atar
+# ÖNEMLİ: cron 1 dk -> run'ı net kısa tut
+RUN_WINDOW_SEC = 45              # 60 altı garantiye yakın
+MIN_REMAINING_TO_START_SCRAPE = 8  # kalan süre azsa yeni scrape'e girme
+
+# STILL spam kontrol
 SEND_STILL_MESSAGES = True
+MAX_STILL_PER_RUN = 3
+
+# Timeout'ları kısalt (run uzamasın)
+HTTP_GET_TIMEOUT = 20
+TELEGRAM_TIMEOUT = 10
 
 
 def load_state():
@@ -71,7 +79,7 @@ def send_telegram(text: str):
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
         json={"chat_id": CHAT_ID, "text": text},
-        timeout=20,
+        timeout=TELEGRAM_TIMEOUT,
     ).raise_for_status()
 
 
@@ -84,8 +92,9 @@ def scrape_once():
       status_counts (dict)
       unknown_status (int)
     """
-    r = requests.get(URL, headers=HEADERS, timeout=30)
+    r = requests.get(URL, headers=HEADERS, timeout=HTTP_GET_TIMEOUT)
     r.raise_for_status()
+
     soup = BeautifulSoup(r.text, "lxml")
     anchors = soup.select("a.apartment")
 
@@ -110,17 +119,14 @@ def scrape_once():
         data_text = a.get("data-text") or ""
         status, link = extract_status_and_link(data_text)
 
-        # bazen status regex kaçırırsa
         if status is None and "unit_free" in data_text:
             status = "frei"
 
-        # sayaçlar (sadece bildiklerimizi say)
         if status in status_counts:
             status_counts[status] += 1
         elif status is not None:
             unknown_status += 1
 
-        # frei listesi
         if status == "frei":
             free_units.append((typ, number, link))
 
@@ -138,33 +144,49 @@ def format_free_message(prefix: str, now: datetime, free_units_sorted):
     return "\n".join(lines)
 
 
+def free_hash(free_units_sorted) -> str:
+    # aynı listeyi stabil hash'le
+    core = "\n".join([f"{t}|{n}|{l or ''}" for t, n, l in free_units_sorted])
+    return sha1(core) if core else ""
+
+
 def main():
     state = load_state()
     start = time.monotonic()
+    deadline = start + RUN_WINDOW_SEC
 
-    # Heartbeat'i sadece ilk turda değerlendireceğiz
+    # Heartbeat sadece ilk turda
     heartbeat_checked = False
 
-    # Run boyunca önceki tur "frei var mıydı?" takip etmek için
-    prev_had_free = False
-
+    still_sent = 0
     loop_i = 0
+
     while True:
         loop_i += 1
         now = datetime.now(TZ)
+
+        remaining = deadline - time.monotonic()
+        if remaining < MIN_REMAINING_TO_START_SCRAPE:
+            break
 
         # ---- Scrape ----
         try:
             total_komfort, free_units_sorted, status_counts, unknown_status = scrape_once()
         except requests.HTTPError as e:
-            # 429/403 gibi durumlarda site kızmış olabilir; bu run'ı bitir
-            send_telegram(f"⚠️ HTTPError: {e} ({now.strftime('%H:%M:%S')} DE)")
+            # site kızdıysa bu run'ı uzatma
+            try:
+                send_telegram(f"⚠️ HTTPError: {e} ({now.strftime('%H:%M:%S')} DE)")
+            except Exception:
+                pass
             break
         except Exception as e:
-            send_telegram(f"⚠️ ERROR: {type(e).__name__}: {e}")
+            try:
+                send_telegram(f"⚠️ ERROR: {type(e).__name__}: {e}")
+            except Exception:
+                pass
             break
 
-        # ---- Heartbeat (günde 2 kez) sadece ilk döngüde çalışsın ----
+        # ---- Heartbeat (günde 2 kez) sadece ilk döngüde ----
         if not heartbeat_checked:
             heartbeat_checked = True
             if now.hour in (10, 18) and now.minute < 5:
@@ -183,40 +205,37 @@ def main():
                     state["last_heartbeat_key"] = hb_key
 
         had_free = bool(free_units_sorted)
+        current_hash = free_hash(free_units_sorted)
+        last_hash = state.get("last_free_hash", "")
 
-        # ---- Mesaj mantığı ----
-        if had_free and not prev_had_free:
-            # ilk kez free gördük -> büyük alarm
+        # ---- Mesaj mantığı (run'lar arası düzgün) ----
+        if had_free and current_hash != last_hash:
+            # yeni free yakaladık (veya free listesi değişti)
             send_telegram(format_free_message("🚨 FREI!", now, free_units_sorted))
+            state["last_free_hash"] = current_hash
 
-        elif had_free and prev_had_free:
-            # free devam ediyor -> still mesajı (istersen)
-            if SEND_STILL_MESSAGES:
-                send_telegram(format_free_message(f"🔔 STILL FREI [#{loop_i}]", now, free_units_sorted))
+        elif had_free and current_hash == last_hash:
+            # free devam ediyor -> still (kısıtlı)
+            if SEND_STILL_MESSAGES and still_sent < MAX_STILL_PER_RUN:
+                still_sent += 1
+                send_telegram(format_free_message(f"🔔 STILL FREI [#{still_sent}]", now, free_units_sorted))
 
-        elif (not had_free) and prev_had_free:
-            # free varken gitti
+        elif (not had_free) and last_hash:
+            # daha önce free vardı, şimdi yok
             send_telegram(f"❌ GONE ({now.strftime('%Y-%m-%d %H:%M:%S')} DE) — artık frei değil.")
+            state["last_free_hash"] = ""
 
-        prev_had_free = had_free
-
-        # ---- Run penceresi kontrolü ----
-        elapsed = time.monotonic() - start
-        if elapsed >= RUN_WINDOW_SEC:
+        # ---- Bir sonraki scrape'e kadar bekle (kalan süreye saygı) ----
+        interval = POLL_INTERVAL_FREE_SEC if had_free else POLL_INTERVAL_NO_FREE_SEC
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             break
 
-        # ---- Bir sonraki scrape'e kadar bekle (2 vites) ----
-        interval = POLL_INTERVAL_FREE_SEC if had_free else POLL_INTERVAL_NO_FREE_SEC
-
-        # kalan süreyi aşma (run window'a saygı)
-        remaining = RUN_WINDOW_SEC - elapsed
-        sleep_for = min(interval, max(0, remaining))
-        if sleep_for <= 0:
+        sleep_for = min(interval, remaining)
+        if sleep_for < 0.5:
             break
         time.sleep(sleep_for)
 
-    # state dosyasını stabil tutalım
-    state["last_free_hash"] = ""
     save_state(state)
     print("OK.")
 
