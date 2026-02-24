@@ -26,8 +26,8 @@ POLL_INTERVAL_NO_FREE_SEC = 30   # frei yokken
 POLL_INTERVAL_FREE_SEC = 10      # frei varken
 
 # ÖNEMLİ: cron 1 dk -> run'ı net kısa tut
-RUN_WINDOW_SEC = 45              # 60 altı garantiye yakın
-MIN_REMAINING_TO_START_SCRAPE = 8  # kalan süre azsa yeni scrape'e girme
+RUN_WINDOW_SEC = 40              # 60 altı garantiye yakın
+MIN_REMAINING_TO_START_SCRAPE = 12  # kalan süre azsa yeni scrape'e girme
 
 # STILL spam kontrol
 SEND_STILL_MESSAGES = True
