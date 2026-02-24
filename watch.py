@@ -170,9 +170,31 @@ def main():
         scrape_dt = time.monotonic() - scrape_t0
         scrape_count += 1
         print(f"SCRAPE_SECONDS={scrape_dt:.1f} SCRAPE_COUNT={scrape_count}")
+        print(
+            f"TOTAL_KOMFORT={total_komfort} "
+            f"FREI={status_counts['frei']} "
+            f"RES={status_counts['reserviert']} "
+            f"VER={status_counts['vermietet']} "
+            f"UNKNOWN={unknown_status}"
+        )
 
+        # ---- Heartbeat: 10 ve 18 (DE saati) — ilk 5 dakikada 1 kez (run başına sadece 1 kez kontrol) ----
         if not heartbeat_checked:
             heartbeat_checked = True
+            if now.hour in (10, 18) and now.minute < 5:
+                hb_key = now.strftime("%Y-%m-%d_%H")
+                if state.get("last_heartbeat_key") != hb_key:
+                    msg = (
+                        f"🫀 Günlük durum ({now.strftime('%Y-%m-%d %H:%M')} DE)\n"
+                        f"Bot aktif\n"
+                        f"Komfort anchor: {total_komfort}\n"
+                        f"Status frei: {status_counts['frei']}\n"
+                        f"Status reserviert: {status_counts['reserviert']}\n"
+                        f"Status vermietet: {status_counts['vermietet']}\n"
+                        f"Unknown status: {unknown_status}"
+                    )
+                    send_telegram(msg)
+                    state["last_heartbeat_key"] = hb_key
 
         had_free = bool(free_units_sorted)
         current_hash = free_hash(free_units_sorted)
