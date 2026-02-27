@@ -13,6 +13,8 @@ permissions:
 jobs:
   run-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,12 +28,12 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      # ✅ state.json'u önceki run'dan geri getir (heartbeat + anti-spam için şart)
+      # ✅ En son state.json'u getir
       - name: Restore state.json cache
         uses: actions/cache@v4
         with:
           path: state.json
-          key: apt-state-${{ github.run_id }}
+          key: apt-state-${{ github.run_number }}
           restore-keys: |
             apt-state-
 
@@ -41,3 +43,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python watch.py
+
+      # ✅ Bu run'ın state.json'unu kaydet
+      - name: Save state.json cache
+        uses: actions/cache@v4
+        with:
+          path: state.json
+          key: apt-state-${{ github.run_number }}
