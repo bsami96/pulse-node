@@ -16,22 +16,29 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 TARGET_TYPES = {"Komfort-Apartment"}
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+# Biraz daha “tarayıcı gibi” header = daha stabil/az blok
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+}
+
 STATE_PATH = "state.json"
 TZ = ZoneInfo("Europe/Berlin")
 
-POLL_INTERVAL_NO_FREE_SEC = 20
-POLL_INTERVAL_FREE_SEC = 10
+# Tek scrape içinde takılmasın
+HTTP_GET_TIMEOUT = 15
+TELEGRAM_TIMEOUT = 10
 
-# ŞU AN SENİN TEST AYARIN
-RUN_WINDOW_SEC = 35
-MIN_REMAINING_TO_START_SCRAPE = 12
-
+# STILL kontrolü: run başına max kaç mesaj
 SEND_STILL_MESSAGES = True
 MAX_STILL_PER_RUN = 3
 
-HTTP_GET_TIMEOUT = 15
-TELEGRAM_TIMEOUT = 10
+# Heartbeat sadece 10:00 ve 18:00, ilk 5 dk penceresinde 1 kez
+HEARTBEAT_HOURS = (10, 18)
+HEARTBEAT_MINUTE_WINDOW = 5
 
 
 def load_state():
@@ -80,8 +87,10 @@ def send_telegram(text: str):
 
 
 def scrape_once():
-    r = requests.get(URL, headers=HEADERS, timeout=HTTP_GET_TIMEOUT)
-    r.raise_for_status()
+    # Session bazen daha hızlı/kararlı
+    with requests.Session() as s:
+        r = s.get(URL, headers=HEADERS, timeout=HTTP_GET_TIMEOUT)
+        r.raise_for_status()
 
     soup = BeautifulSoup(r.text, "lxml")
     anchors = soup.select("a.apartment")
@@ -107,12 +116,14 @@ def scrape_once():
         data_text = a.get("data-text") or ""
         status, link = extract_status_and_link(data_text)
 
+        # Yedek tespit
         if status is None and "unit_free" in data_text:
             status = "frei"
 
         if status in status_counts:
             status_counts[status] += 1
-        elif status is not None:
+        else:
+            # status None veya farklı bir şeyse unknown’a
             unknown_status += 1
 
         if status == "frei":
@@ -137,97 +148,75 @@ def free_hash(free_units_sorted) -> str:
     return sha1(core) if core else ""
 
 
+def maybe_send_heartbeat(state, now, total_komfort, status_counts, unknown_status):
+    if now.hour not in HEARTBEAT_HOURS:
+        return
+
+    if now.minute >= HEARTBEAT_MINUTE_WINDOW:
+        return
+
+    hb_key = now.strftime("%Y-%m-%d_%H")
+    if state.get("last_heartbeat_key") == hb_key:
+        return
+
+    msg = (
+        f"🫀 Günlük durum ({now.strftime('%Y-%m-%d %H:%M')} DE)\n"
+        f"Bot aktif\n"
+        f"Komfort anchor: {total_komfort}\n"
+        f"Status frei: {status_counts['frei']}\n"
+        f"Status reserviert: {status_counts['reserviert']}\n"
+        f"Status vermietet: {status_counts['vermietet']}\n"
+        f"Unknown status: {unknown_status}"
+    )
+    send_telegram(msg)
+    state["last_heartbeat_key"] = hb_key
+
+
 def main():
-    # 🔥 GENEL SÜRE ÖLÇÜMÜ
     script_t0 = time.monotonic()
-
     state = load_state()
-    start = time.monotonic()
-    deadline = start + RUN_WINDOW_SEC
+    now = datetime.now(TZ)
 
-    heartbeat_checked = False
+    # Tek scrape ölçümü
+    scrape_t0 = time.monotonic()
+    total_komfort, free_units_sorted, status_counts, unknown_status = scrape_once()
+    scrape_dt = time.monotonic() - scrape_t0
+
+    print(f"SCRAPE_SECONDS={scrape_dt:.1f}")
+    print(
+        f"TOTAL_KOMFORT={total_komfort} "
+        f"FREI={status_counts['frei']} "
+        f"RES={status_counts['reserviert']} "
+        f"VER={status_counts['vermietet']} "
+        f"UNKNOWN={unknown_status}"
+    )
+
+    # Heartbeat (tek run’da bir kez)
+    maybe_send_heartbeat(state, now, total_komfort, status_counts, unknown_status)
+
+    had_free = bool(free_units_sorted)
+    current_hash = free_hash(free_units_sorted)
+    last_hash = state.get("last_free_hash", "")
+
     still_sent = 0
-    loop_i = 0
-    scrape_count = 0
 
-    while True:
-        loop_i += 1
-        now = datetime.now(TZ)
+    if had_free and current_hash != last_hash:
+        send_telegram(format_free_message("🚨 FREI!", now, free_units_sorted))
+        state["last_free_hash"] = current_hash
 
-        remaining = deadline - time.monotonic()
-        if remaining < MIN_REMAINING_TO_START_SCRAPE:
-            print(f"STOP_EARLY remaining={remaining:.1f}s")
-            break
+    elif had_free and current_hash == last_hash:
+        if SEND_STILL_MESSAGES:
+            # Tek run içinde istersen 1 tane STILL bile yeter. Ama sen MAX_STILL diyorsun.
+            # Burada loop olmadığı için MAX_STILL pratikte 1 anlamına gelir.
+            still_sent = min(MAX_STILL_PER_RUN, 1)
+            send_telegram(format_free_message(f"🔔 STILL FREI [#{still_sent}]", now, free_units_sorted))
 
-        # 🔥 SCRAPE SÜRE ÖLÇÜMÜ
-        scrape_t0 = time.monotonic()
-        try:
-            total_komfort, free_units_sorted, status_counts, unknown_status = scrape_once()
-        except Exception as e:
-            print(f"SCRAPE_ERROR {type(e).__name__}: {e}")
-            break
-
-        scrape_dt = time.monotonic() - scrape_t0
-        scrape_count += 1
-        print(f"SCRAPE_SECONDS={scrape_dt:.1f} SCRAPE_COUNT={scrape_count}")
-        print(
-            f"TOTAL_KOMFORT={total_komfort} "
-            f"FREI={status_counts['frei']} "
-            f"RES={status_counts['reserviert']} "
-            f"VER={status_counts['vermietet']} "
-            f"UNKNOWN={unknown_status}"
-        )
-
-        # ---- Heartbeat: 10 ve 18 (DE saati) — ilk 5 dakikada 1 kez (run başına sadece 1 kez kontrol) ----
-        if not heartbeat_checked:
-            heartbeat_checked = True
-            if now.hour in (10, 18) and now.minute < 5:
-                hb_key = now.strftime("%Y-%m-%d_%H")
-                if state.get("last_heartbeat_key") != hb_key:
-                    msg = (
-                        f"🫀 Günlük durum ({now.strftime('%Y-%m-%d %H:%M')} DE)\n"
-                        f"Bot aktif\n"
-                        f"Komfort anchor: {total_komfort}\n"
-                        f"Status frei: {status_counts['frei']}\n"
-                        f"Status reserviert: {status_counts['reserviert']}\n"
-                        f"Status vermietet: {status_counts['vermietet']}\n"
-                        f"Unknown status: {unknown_status}"
-                    )
-                    send_telegram(msg)
-                    state["last_heartbeat_key"] = hb_key
-
-        had_free = bool(free_units_sorted)
-        current_hash = free_hash(free_units_sorted)
-        last_hash = state.get("last_free_hash", "")
-
-        if had_free and current_hash != last_hash:
-            send_telegram(format_free_message("🚨 FREI!", now, free_units_sorted))
-            state["last_free_hash"] = current_hash
-
-        elif had_free and current_hash == last_hash:
-            if SEND_STILL_MESSAGES and still_sent < MAX_STILL_PER_RUN:
-                still_sent += 1
-                send_telegram(format_free_message(f"🔔 STILL FREI [#{still_sent}]", now, free_units_sorted))
-
-        elif (not had_free) and last_hash:
-            send_telegram(f"❌ GONE ({now.strftime('%Y-%m-%d %H:%M:%S')} DE)")
-            state["last_free_hash"] = ""
-
-        interval = POLL_INTERVAL_FREE_SEC if had_free else POLL_INTERVAL_NO_FREE_SEC
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-
-        sleep_for = min(interval, remaining)
-        if sleep_for < 0.5:
-            break
-
-        print(f"SLEEP={sleep_for:.1f}s")
-        time.sleep(sleep_for)
+    elif (not had_free) and last_hash:
+        send_telegram(f"❌ GONE ({now.strftime('%Y-%m-%d %H:%M:%S')} DE)")
+        state["last_free_hash"] = ""
 
     save_state(state)
 
-    # 🔥 TOPLAM SCRIPT SÜRESİ
     total_script = time.monotonic() - script_t0
     print(f"SCRIPT_SECONDS={total_script:.1f}")
     print("OK.")
