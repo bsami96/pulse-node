@@ -5,7 +5,7 @@ on:
 
 concurrency:
   group: apt-watcher
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -28,7 +28,6 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      # ✅ En son state.json'u getir
       - name: Restore state.json cache
         uses: actions/cache@v4
         with:
@@ -44,7 +43,6 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python watch.py
 
-      # ✅ Bu run'ın state.json'unu kaydet
       - name: Save state.json cache
         uses: actions/cache@v4
         with:
